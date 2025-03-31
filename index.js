@@ -12,7 +12,7 @@ const path = require("path");
 
 // Update CORS to allow requests from GitHub Pages
 app.use(cors({
-  origin: ['https://ericliucs.github.io', 'http://localhost:3000'],
+  origin: ['https://ericliucs.github.io', 'http://localhost:3001'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 }));
