@@ -152,48 +152,77 @@ app.post("/save", authenticateToken, async (req, res) => {
 
   try {
     console.log("Saving game data for user:", userId);
-    console.log("Buildings data type:", typeof buildings);
-    console.log("Upgrades data type:", typeof upgrades);
+    console.log("Buildings type:", typeof buildings);
+    console.log("Upgrades type:", typeof upgrades);
 
-    // Ensure buildings is an array before saving
-    const buildingsData = Array.isArray(buildings) ? buildings : [];
+    // For JSONB columns, we need to convert to JSON string if not already
+    let buildingsJson;
+    if (typeof buildings === 'string') {
+      try {
+        // Validate it's actually JSON by parsing and stringifying again
+        buildingsJson = JSON.stringify(JSON.parse(buildings));
+      } catch (e) {
+        console.error("Invalid buildings JSON string:", e);
+        buildingsJson = '[]';
+      }
+    } else {
+      // If it's an object, stringify it directly
+      buildingsJson = JSON.stringify(buildings || []);
+    }
 
-    // Handle upgrades properly - it might be an array from entries() or direct array
-    let upgradesData = Array.isArray(upgrades) ? upgrades : [];
+    let upgradesJson;
+    if (typeof upgrades === 'string') {
+      try {
+        upgradesJson = JSON.stringify(JSON.parse(upgrades));
+      } catch (e) {
+        console.error("Invalid upgrades JSON string:", e);
+        upgradesJson = '[]';
+      }
+    } else {
+      upgradesJson = JSON.stringify(upgrades || []);
+    }
 
-    console.log("Prepared buildings count:", buildingsData.length);
-    console.log("Prepared upgrades count:", upgradesData.length);
+    console.log("Buildings JSON length:", buildingsJson.length);
+    console.log("Upgrades JSON length:", upgradesJson.length);
 
-    // Save to database
-    await pool.query(
-      `UPDATE game_saves SET 
-        loc = $1, 
-        loc_per_second = $2, 
-        loc_per_click = $3, 
-        upgrades = $4,
-        buildings = $5,
-        game_version = $6,
-        last_updated = NOW() 
-      WHERE user_id = $7`,
-      [
-        loc,
-        locPerSecond,
-        locPerClick,
-        JSON.stringify(upgradesData),
-        JSON.stringify(buildingsData),
-        gameVersion || '0.1',
-        userId
-      ]
+    // Check if record exists first
+    const checkResult = await pool.query(
+      "SELECT id FROM game_saves WHERE user_id = $1",
+      [userId]
     );
+
+    if (checkResult.rows.length === 0) {
+      // Insert new record
+      await pool.query(
+        `INSERT INTO game_saves 
+          (user_id, loc, loc_per_second, loc_per_click, upgrades, buildings, game_version, last_updated) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+        [userId, loc, locPerSecond, locPerClick, upgradesJson, buildingsJson, gameVersion || '0.1']
+      );
+    } else {
+      // Update existing record
+      await pool.query(
+        `UPDATE game_saves SET 
+          loc = $1, 
+          loc_per_second = $2, 
+          loc_per_click = $3, 
+          upgrades = $4,
+          buildings = $5,
+          game_version = $6,
+          last_updated = NOW() 
+        WHERE user_id = $7`,
+        [loc, locPerSecond, locPerClick, upgradesJson, buildingsJson, gameVersion || '0.1', userId]
+      );
+    }
 
     await pool.query(
       `INSERT INTO leaderboard (user_id, total_loc, loc_per_second, last_updated)
        VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (user_id) 
-       DO UPDATE SET 
-         total_loc = $2, 
-         loc_per_second = $3, 
-         last_updated = NOW()`,
+           ON CONFLICT (user_id) 
+       DO UPDATE SET
+          total_loc = $2,
+          loc_per_second = $3,
+          last_updated = NOW()`,
       [userId, loc, locPerSecond]
     );
 
@@ -235,41 +264,46 @@ app.get("/load", authenticateToken, async (req, res) => {
 
     const savedGame = result.rows[0];
     console.log("Retrieved saved game:", savedGame.id);
-    console.log("Buildings raw data:", savedGame.buildings);
-    console.log("Upgrades raw data:", savedGame.upgrades);
 
-    // Parse buildings from JSON if it exists
+    // Check what's in the buildings and upgrades columns
+    console.log("Buildings type:", typeof savedGame.buildings);
+    console.log("Upgrades type:", typeof savedGame.upgrades);
+
     let buildings = [];
-    if (savedGame.buildings) {
-      try {
-        const parsedBuildings = JSON.parse(savedGame.buildings);
-        if (Array.isArray(parsedBuildings)) {
-          buildings = parsedBuildings;
-        } else {
-          console.log("Buildings is not an array after parsing, using empty array");
-        }
-      } catch (e) {
-        console.error("Error parsing buildings JSON:", e);
-      }
-    }
-
-    // Parse upgrades from JSON if it exists
     let upgrades = [];
-    if (savedGame.upgrades) {
-      try {
-        const parsedUpgrades = JSON.parse(savedGame.upgrades);
-        if (Array.isArray(parsedUpgrades)) {
-          upgrades = parsedUpgrades;
-        } else {
-          console.log("Upgrades is not an array after parsing, using empty array");
+
+    // Handle buildings data - if it's already a string, no need to stringify it again
+    if (savedGame.buildings) {
+      if (typeof savedGame.buildings === 'object') {
+        // PostgreSQL may have already parsed the JSONB field
+        buildings = savedGame.buildings;
+      } else if (typeof savedGame.buildings === 'string') {
+        try {
+          buildings = JSON.parse(savedGame.buildings);
+        } catch (e) {
+          console.error("Error parsing buildings JSON:", e);
+          console.error("Raw buildings data:", savedGame.buildings);
         }
-      } catch (e) {
-        console.error("Error parsing upgrades JSON:", e);
       }
     }
 
-    console.log("Sending buildings count:", buildings.length);
-    console.log("Sending upgrades count:", upgrades.length);
+    // Handle upgrades data
+    if (savedGame.upgrades) {
+      if (typeof savedGame.upgrades === 'object') {
+        // PostgreSQL may have already parsed the JSONB field
+        upgrades = savedGame.upgrades;
+      } else if (typeof savedGame.upgrades === 'string') {
+        try {
+          upgrades = JSON.parse(savedGame.upgrades);
+        } catch (e) {
+          console.error("Error parsing upgrades JSON:", e);
+          console.error("Raw upgrades data:", savedGame.upgrades);
+        }
+      }
+    }
+
+    console.log("Buildings after processing:", Array.isArray(buildings) ? `Array with ${buildings.length} items` : typeof buildings);
+    console.log("Upgrades after processing:", Array.isArray(upgrades) ? `Array with ${upgrades.length} items` : typeof upgrades);
 
     res.json({
       loc: savedGame.loc.toString(),
