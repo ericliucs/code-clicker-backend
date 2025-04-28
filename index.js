@@ -147,36 +147,59 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/save", authenticateToken, async (req, res) => {
-  const { loc, locPerSecond, locPerClick, upgrades, buildings } = req.body;
+  const { loc, locPerSecond, locPerClick, upgrades, buildings, gameVersion } = req.body;
   const userId = req.user.id;
 
   try {
+    console.log("Saving game data for user:", userId);
+    console.log("Buildings data type:", typeof buildings);
+    console.log("Upgrades data type:", typeof upgrades);
+
+    // Ensure buildings is an array before saving
+    const buildingsData = Array.isArray(buildings) ? buildings : [];
+
+    // Handle upgrades properly - it might be an array from entries() or direct array
+    let upgradesData = Array.isArray(upgrades) ? upgrades : [];
+
+    console.log("Prepared buildings count:", buildingsData.length);
+    console.log("Prepared upgrades count:", upgradesData.length);
+
+    // Save to database
     await pool.query(
-      `UPDATE game_saves SET
-                             loc = $1,
-                             loc_per_second = $2,
-                             loc_per_click = $3,
-                             upgrades = $4,
-                             buildings = $5,
-                             last_updated = NOW()
-        WHERE user_id = $6`,
-      [loc, locPerSecond, locPerClick, JSON.stringify(upgrades), JSON.stringify(buildings), userId]
+      `UPDATE game_saves SET 
+        loc = $1, 
+        loc_per_second = $2, 
+        loc_per_click = $3, 
+        upgrades = $4,
+        buildings = $5,
+        game_version = $6,
+        last_updated = NOW() 
+      WHERE user_id = $7`,
+      [
+        loc,
+        locPerSecond,
+        locPerClick,
+        JSON.stringify(upgradesData),
+        JSON.stringify(buildingsData),
+        gameVersion || '0.1',
+        userId
+      ]
     );
 
     await pool.query(
       `INSERT INTO leaderboard (user_id, total_loc, loc_per_second, last_updated)
        VALUES ($1, $2, $3, NOW())
-           ON CONFLICT (user_id) 
-       DO UPDATE SET
-          total_loc = $2,
-          loc_per_second = $3,
-          last_updated = NOW()`,
+       ON CONFLICT (user_id) 
+       DO UPDATE SET 
+         total_loc = $2, 
+         loc_per_second = $3, 
+         last_updated = NOW()`,
       [userId, loc, locPerSecond]
     );
 
     res.json({ message: "Game progress saved successfully" });
   } catch (err) {
-    console.error(err);
+    console.error("Error saving game:", err);
     res.status(500).json({ error: "Server error while saving game" });
   }
 });
@@ -185,16 +208,20 @@ app.get("/load", authenticateToken, async (req, res) => {
   const userId = req.user.id;
 
   try {
+    console.log("Loading game data for user:", userId);
+
     const result = await pool.query(
       "SELECT * FROM game_saves WHERE user_id = $1",
       [userId]
     );
 
     if (result.rows.length === 0) {
+      console.log("No save found, creating new one for user:", userId);
+
       // No save found, create a new one with default values
       await pool.query(
-        "INSERT INTO game_saves (user_id, loc, loc_per_second, loc_per_click, upgrades, buildings) VALUES ($1, $2, $3, $4, $5, $6)",
-        [userId, 0, 0, 1, JSON.stringify([]), JSON.stringify([])]
+        "INSERT INTO game_saves (user_id, loc, loc_per_second, loc_per_click, upgrades, buildings, game_version) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        [userId, 0, 0, 1, '[]', '[]', '0.1']
       );
 
       return res.json({
@@ -207,12 +234,20 @@ app.get("/load", authenticateToken, async (req, res) => {
     }
 
     const savedGame = result.rows[0];
+    console.log("Retrieved saved game:", savedGame.id);
+    console.log("Buildings raw data:", savedGame.buildings);
+    console.log("Upgrades raw data:", savedGame.upgrades);
 
     // Parse buildings from JSON if it exists
     let buildings = [];
     if (savedGame.buildings) {
       try {
-        buildings = JSON.parse(savedGame.buildings);
+        const parsedBuildings = JSON.parse(savedGame.buildings);
+        if (Array.isArray(parsedBuildings)) {
+          buildings = parsedBuildings;
+        } else {
+          console.log("Buildings is not an array after parsing, using empty array");
+        }
       } catch (e) {
         console.error("Error parsing buildings JSON:", e);
       }
@@ -222,21 +257,30 @@ app.get("/load", authenticateToken, async (req, res) => {
     let upgrades = [];
     if (savedGame.upgrades) {
       try {
-        upgrades = JSON.parse(savedGame.upgrades);
+        const parsedUpgrades = JSON.parse(savedGame.upgrades);
+        if (Array.isArray(parsedUpgrades)) {
+          upgrades = parsedUpgrades;
+        } else {
+          console.log("Upgrades is not an array after parsing, using empty array");
+        }
       } catch (e) {
         console.error("Error parsing upgrades JSON:", e);
       }
     }
+
+    console.log("Sending buildings count:", buildings.length);
+    console.log("Sending upgrades count:", upgrades.length);
 
     res.json({
       loc: savedGame.loc.toString(),
       locPerSecond: savedGame.loc_per_second.toString(),
       locPerClick: savedGame.loc_per_click.toString(),
       upgrades: upgrades,
-      buildings: buildings
+      buildings: buildings,
+      gameVersion: savedGame.game_version || '0.1'
     });
   } catch (err) {
-    console.error(err);
+    console.error("Error loading game:", err);
     res.status(500).json({ error: "Server error while loading game" });
   }
 });
