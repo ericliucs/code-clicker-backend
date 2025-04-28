@@ -218,11 +218,21 @@ app.get("/load", authenticateToken, async (req, res) => {
       }
     }
 
+    // Parse upgrades from JSON if it exists
+    let upgrades = [];
+    if (savedGame.upgrades) {
+      try {
+        upgrades = JSON.parse(savedGame.upgrades);
+      } catch (e) {
+        console.error("Error parsing upgrades JSON:", e);
+      }
+    }
+
     res.json({
       loc: savedGame.loc.toString(),
       locPerSecond: savedGame.loc_per_second.toString(),
       locPerClick: savedGame.loc_per_click.toString(),
-      upgrades: savedGame.upgrades,
+      upgrades: upgrades,
       buildings: buildings
     });
   } catch (err) {
