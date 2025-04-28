@@ -12,7 +12,7 @@ const path = require("path");
 
 // Update CORS to allow requests from GitHub Pages
 app.use(cors({
-  origin: ['https://ericliucs.github.io', 'http://localhost:3001'],
+  origin: ['https://ericliucs.github.io', 'http://localhost:3000', 'http://localhost:3001'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 }));
@@ -147,29 +147,30 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/save", authenticateToken, async (req, res) => {
-  const { loc, locPerSecond, locPerClick, upgrades } = req.body;
+  const { loc, locPerSecond, locPerClick, upgrades, buildings } = req.body;
   const userId = req.user.id;
 
   try {
     await pool.query(
-      `UPDATE game_saves SET 
-        loc = $1, 
-        loc_per_second = $2, 
-        loc_per_click = $3, 
-        upgrades = $4, 
-        last_updated = NOW() 
-      WHERE user_id = $5`,
-      [loc, locPerSecond, locPerClick, JSON.stringify(upgrades), userId]
+      `UPDATE game_saves SET
+                             loc = $1,
+                             loc_per_second = $2,
+                             loc_per_click = $3,
+                             upgrades = $4,
+                             buildings = $5,
+                             last_updated = NOW()
+        WHERE user_id = $6`,
+      [loc, locPerSecond, locPerClick, JSON.stringify(upgrades), JSON.stringify(buildings), userId]
     );
 
     await pool.query(
       `INSERT INTO leaderboard (user_id, total_loc, loc_per_second, last_updated)
        VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (user_id) 
-       DO UPDATE SET 
-         total_loc = $2, 
-         loc_per_second = $3, 
-         last_updated = NOW()`,
+           ON CONFLICT (user_id) 
+       DO UPDATE SET
+          total_loc = $2,
+          loc_per_second = $3,
+          last_updated = NOW()`,
       [userId, loc, locPerSecond]
     );
 
@@ -190,31 +191,39 @@ app.get("/load", authenticateToken, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      // TODO: Maybe just deny the save instead?
       // No save found, create a new one with default values
       await pool.query(
-        "INSERT INTO game_saves (user_id, loc, loc_per_second, loc_per_click, upgrades) VALUES ($1, $2, $3, $4, $5)",
-        [userId, 0, 0, 1, JSON.stringify([])]
+        "INSERT INTO game_saves (user_id, loc, loc_per_second, loc_per_click, upgrades, buildings) VALUES ($1, $2, $3, $4, $5, $6)",
+        [userId, 0, 0, 1, JSON.stringify([]), JSON.stringify([])]
       );
-
-      const savedGame = result.rows[0];
-      const upgrades = JSON.parse(savedGame.upgrades);
 
       return res.json({
         loc: "0",
         locPerSecond: "0",
         locPerClick: "1",
-        upgrades: upgrades,
+        upgrades: [],
+        buildings: []
       });
     }
 
     const savedGame = result.rows[0];
+
+    // Parse buildings from JSON if it exists
+    let buildings = [];
+    if (savedGame.buildings) {
+      try {
+        buildings = JSON.parse(savedGame.buildings);
+      } catch (e) {
+        console.error("Error parsing buildings JSON:", e);
+      }
+    }
 
     res.json({
       loc: savedGame.loc.toString(),
       locPerSecond: savedGame.loc_per_second.toString(),
       locPerClick: savedGame.loc_per_click.toString(),
       upgrades: savedGame.upgrades,
+      buildings: buildings
     });
   } catch (err) {
     console.error(err);
